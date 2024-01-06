@@ -58,6 +58,7 @@ func buildOpts(options ...any) (*opts, error) {
 	countPfx := 0
 	countSep := 0
 	countNm := 0
+	countExpand := 0
 	for _, o := range options {
 		if o != nil {
 			used := false
@@ -75,6 +76,11 @@ func buildOpts(options ...any) (*opts, error) {
 				used = true
 				result.naming = nm
 				countNm++
+			}
+			if ex, ok := o.(ExpandOption); ok {
+				used = true
+				result.expand = ex
+				countExpand++
 			}
 			if cs, ok := o.(CustomSetterOption); ok {
 				used = true
@@ -94,6 +100,9 @@ func buildOpts(options ...any) (*opts, error) {
 	if countNm > 1 {
 		return nil, errors.New("multiple naming options")
 	}
+	if countExpand > 1 {
+		return nil, errors.New("multiple expand options")
+	}
 	return result, nil
 }
 
@@ -101,6 +110,7 @@ type opts struct {
 	prefix    PrefixOption
 	separator SeparatorOption
 	naming    NamingOption
+	expand    ExpandOption
 	customs   []CustomSetterOption
 }
 
@@ -123,11 +133,16 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				if err = fi.customSetter.Set(fld, v.Field(f), raw); err != nil {
 					return err
 				}
-			} else if fi.prefixedMap {
+			} else if fi.isPrefixedMap {
 				pfx := addPrefixes(prefix, fi.prefix, options.separator.GetSeparator())
-				setPrefixMap(v.Field(f), pfx)
-			} else if fld.Type.Kind() == reflect.Struct {
+				setPrefixMap(v.Field(f), pfx, options)
+			} else if fi.isStruct {
 				fv := v.Field(f)
+				if fi.pointer {
+					fvp := reflect.New(fv.Type().Elem())
+					fv.Set(fvp)
+					fv = fvp.Elem()
+				}
 				pfx := addPrefixes(prefix, fi.prefix, options.separator.GetSeparator())
 				if err = loadStruct(fv, pfx, options); err != nil {
 					return err
@@ -141,7 +156,10 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				} else if !ok && fi.pointer {
 					continue
 				}
-				if err = setValue(name, raw, fld, v.Field(f)); err != nil {
+				if options.expand != nil {
+					raw = options.expand.Expand(raw)
+				}
+				if err = setValue(name, raw, fld, fi, v.Field(f)); err != nil {
 					return err
 				}
 			}
@@ -152,72 +170,58 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 
 var durationType = reflect.TypeOf(time.Duration(0))
 
-func setValue(name string, raw string, fld reflect.StructField, fv reflect.Value) (err error) {
+func setValue(name string, raw string, fld reflect.StructField, fi *fieldInfo, fv reflect.Value) (err error) {
 	k := fv.Type().Kind()
-	isPtr := false
-	if k == reflect.Pointer {
-		isPtr = true
+	if fi.pointer {
 		k = fv.Type().Elem().Kind()
 	}
 	switch k {
 	case reflect.String:
-		if isPtr {
-			fv.Set(reflect.ValueOf(&raw))
-		} else {
-			fv.Set(reflect.ValueOf(raw))
-		}
+		setStringValue(raw, fv, fi.pointer)
 	case reflect.Bool:
-		if b, bErr := strconv.ParseBool(raw); bErr == nil {
-			if isPtr {
-				fv.Set(reflect.ValueOf(&b))
-			} else {
-				fv.Set(reflect.ValueOf(b))
-			}
-		} else {
-			return fmt.Errorf("env var '%s' is not a bool", name)
-		}
+		err = setBoolValue(name, raw, fv, fi.pointer)
 	case reflect.Int:
-		err = setIntValue[int](name, raw, fv, isPtr)
+		err = setIntValue[int](name, raw, fv, fi.pointer)
 	case reflect.Int8:
-		err = setIntValue[int8](name, raw, fv, isPtr)
+		err = setIntValue[int8](name, raw, fv, fi.pointer)
 	case reflect.Int16:
-		err = setIntValue[int16](name, raw, fv, isPtr)
+		err = setIntValue[int16](name, raw, fv, fi.pointer)
 	case reflect.Int32:
-		err = setIntValue[int32](name, raw, fv, isPtr)
+		err = setIntValue[int32](name, raw, fv, fi.pointer)
 	case reflect.Int64:
 		if fv.Type() == durationType {
-			err = setIntValue[time.Duration](name, raw, fv, isPtr)
+			err = setIntValue[time.Duration](name, raw, fv, fi.pointer)
 		} else {
-			err = setIntValue[int64](name, raw, fv, isPtr)
+			err = setIntValue[int64](name, raw, fv, fi.pointer)
 		}
 	case reflect.Uint:
-		err = setUintValue[uint](name, raw, fv, isPtr)
+		err = setUintValue[uint](name, raw, fv, fi.pointer)
 	case reflect.Uint8:
-		err = setUintValue[uint8](name, raw, fv, isPtr)
+		err = setUintValue[uint8](name, raw, fv, fi.pointer)
 	case reflect.Uint16:
-		err = setUintValue[uint16](name, raw, fv, isPtr)
+		err = setUintValue[uint16](name, raw, fv, fi.pointer)
 	case reflect.Uint32:
-		err = setUintValue[uint32](name, raw, fv, isPtr)
+		err = setUintValue[uint32](name, raw, fv, fi.pointer)
 	case reflect.Uint64:
-		err = setUintValue[uint64](name, raw, fv, isPtr)
+		err = setUintValue[uint64](name, raw, fv, fi.pointer)
 	case reflect.Float32:
-		err = setFloatValue[float32](name, raw, fv, isPtr)
+		err = setFloatValue[float32](name, raw, fv, fi.pointer)
 	case reflect.Float64:
-		err = setFloatValue[float64](name, raw, fv, isPtr)
+		err = setFloatValue[float64](name, raw, fv, fi.pointer)
 	case reflect.Slice:
-		err = setSlice(name, raw, fld, fv)
+		err = setSlice(name, raw, fld, fi, fv)
 	case reflect.Map:
-		err = setMap(name, raw, fld, fv)
+		err = setMap(name, raw, fld, fi, fv)
 	}
 	return
 }
 
-func setSlice(name string, raw string, fld reflect.StructField, fv reflect.Value) error {
+func setSlice(name string, raw string, fld reflect.StructField, fi *fieldInfo, fv reflect.Value) error {
 	if raw != "" {
-		vs := strings.Split(raw, ",")
+		vs := strings.Split(raw, fi.delimiter)
 		sl := reflect.MakeSlice(fv.Type(), len(vs), len(vs))
 		for i, v := range vs {
-			if err := setValue(name, v, fld, sl.Index(i)); err != nil {
+			if err := setValue(name, v, fld, fi, sl.Index(i)); err != nil {
 				return err
 			}
 		}
@@ -226,23 +230,23 @@ func setSlice(name string, raw string, fld reflect.StructField, fv reflect.Value
 	return nil
 }
 
-func setMap(name string, raw string, fld reflect.StructField, fv reflect.Value) error {
+func setMap(name string, raw string, fld reflect.StructField, fi *fieldInfo, fv reflect.Value) error {
 	if raw != "" {
-		vs := strings.Split(raw, ",")
+		vs := strings.Split(raw, fi.delimiter)
 		m := reflect.MakeMap(fv.Type())
 		kt := fv.Type().Key()
 		vt := fv.Type().Elem()
 		for _, v := range vs {
-			kvp := strings.Split(v, ":")
+			kvp := strings.Split(v, fi.separator)
 			if len(kvp) != 2 {
 				return fmt.Errorf("env var '%s' contains invalid key/value pair - %s", name, v)
 			}
 			kv := reflect.New(kt).Elem()
-			if err := setValue(name, kvp[0], fld, kv); err != nil {
+			if err := setValue(name, kvp[0], fld, fi, kv); err != nil {
 				return err
 			}
 			vv := reflect.New(vt).Elem()
-			if err := setValue(name, kvp[1], fld, vv); err != nil {
+			if err := setValue(name, kvp[1], fld, fi, vv); err != nil {
 				return err
 			}
 			m.SetMapIndex(kv, vv)
@@ -252,28 +256,39 @@ func setMap(name string, raw string, fld reflect.StructField, fv reflect.Value) 
 	return nil
 }
 
-func setPrefixMap(fv reflect.Value, prefix string) {
+func setPrefixMap(fv reflect.Value, prefix string, options *opts) {
 	m := map[string]string{}
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, prefix) {
 			ev := strings.SplitN(e, "=", 2)
-			m[ev[0][len(prefix):]] = ev[1]
+			if options.expand != nil {
+				m[ev[0][len(prefix):]] = options.expand.Expand(ev[1])
+			} else {
+				m[ev[0][len(prefix):]] = ev[1]
+			}
 		}
 	}
 	fv.Set(reflect.ValueOf(m))
 }
 
-func setFloatValue[T float32 | float64](name string, raw string, fv reflect.Value, isPtr bool) error {
-	if f, err := strconv.ParseFloat(raw, getBitSize(fv, isPtr)); err == nil {
+func setStringValue(raw string, fv reflect.Value, isPtr bool) {
+	if isPtr {
+		fv.Set(reflect.ValueOf(&raw))
+	} else {
+		fv.Set(reflect.ValueOf(raw))
+	}
+}
+
+func setBoolValue(name string, raw string, fv reflect.Value, isPtr bool) error {
+	if b, bErr := strconv.ParseBool(raw); bErr == nil {
 		if isPtr {
-			pv := T(f)
-			fv.Set(reflect.ValueOf(&pv))
+			fv.Set(reflect.ValueOf(&b))
 		} else {
-			fv.Set(reflect.ValueOf(T(f)))
+			fv.Set(reflect.ValueOf(b))
 		}
 		return nil
 	} else {
-		return fmt.Errorf("env var '%s' is not a float", name)
+		return fmt.Errorf("env var '%s' is not a bool", name)
 	}
 }
 
@@ -305,6 +320,20 @@ func setUintValue[T uint | uint8 | uint16 | uint32 | uint64](name string, raw st
 	}
 }
 
+func setFloatValue[T float32 | float64](name string, raw string, fv reflect.Value, isPtr bool) error {
+	if f, err := strconv.ParseFloat(raw, getBitSize(fv, isPtr)); err == nil {
+		if isPtr {
+			pv := T(f)
+			fv.Set(reflect.ValueOf(&pv))
+		} else {
+			fv.Set(reflect.ValueOf(T(f)))
+		}
+		return nil
+	} else {
+		return fmt.Errorf("env var '%s' is not a float", name)
+	}
+}
+
 func getBitSize(fv reflect.Value, isPtr bool) int {
 	if isPtr {
 		return fv.Type().Elem().Bits()
@@ -323,16 +352,13 @@ func addPrefixes(currPfx, addPfx string, separator string) string {
 
 var tagSplitter = splitter.MustCreateSplitter(',', splitter.DoubleQuotes, splitter.SingleQuotes).
 	AddDefaultOptions(splitter.Trim(" "), splitter.IgnoreEmpties)
+var eqSplitter = splitter.MustCreateSplitter('=', splitter.DoubleQuotes, splitter.SingleQuotes).
+	AddDefaultOptions(splitter.Trim(" "))
 
 func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
-	isPtr, custom, err := checkFieldType(fld, options)
+	result, err := checkFieldType(fld, options)
 	if err != nil {
 		return nil, err
-	}
-	result := &fieldInfo{
-		pointer:      isPtr,
-		optional:     isPtr,
-		customSetter: custom,
 	}
 	if tag, ok := fld.Tag.Lookup("env"); ok {
 		parts, err := tagSplitter.Split(tag)
@@ -340,32 +366,40 @@ func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
 			return nil, fmt.Errorf("invalid tag '%s' on field '%s'", tag, fld.Name)
 		}
 		for _, s := range parts {
-			if strings.Contains(s, "=") {
-				if pts := strings.Split(s, "="); len(pts) == 2 {
-					switch pts[0] {
-					case "default":
-						result.hasDefault = true
-						result.defaultValue = unquoted(pts[1])
-						continue
-					case "prefix":
-						result.prefix = pts[1]
-						if fld.Type.Kind() == reflect.Map {
-							result.prefixedMap = fld.Type.Elem().Kind() == reflect.String && fld.Type.Key().Kind() == reflect.String
-						}
-						if !result.prefixedMap && fld.Type.Kind() != reflect.Struct {
-							return nil, fmt.Errorf("cannot use env tag 'prefix' on field '%s' (only for structs or map[string]string)", fld.Name)
-						}
-						continue
+			if pts, _ := eqSplitter.Split(s); len(pts) == 2 {
+				switch pts[0] {
+				case "default":
+					result.hasDefault = true
+					result.defaultValue = unquoted(pts[1])
+					continue
+				case "prefix":
+					result.prefix = pts[1]
+					if fld.Type.Kind() == reflect.Map {
+						result.isPrefixedMap = fld.Type.Elem().Kind() == reflect.String && fld.Type.Key().Kind() == reflect.String
 					}
+					if !result.isPrefixedMap && !result.isStruct {
+						return nil, fmt.Errorf("cannot use env tag 'prefix' on field '%s' (only for structs or map[string]string)", fld.Name)
+					}
+					continue
+				case "separator", "sep":
+					result.separator = unquoted(pts[1])
+					continue
+				case "delimiter", "delim":
+					result.delimiter = unquoted(pts[1])
+					continue
 				}
 				return nil, fmt.Errorf("invalid tag '%s' on field '%s'", s, fld.Name)
-			} else {
+			} else if len(pts) == 1 {
 				switch s {
 				case "optional":
 					result.optional = true
+				case "default", "prefix", "separator", "sep", "delimiter", "delim":
+					return nil, fmt.Errorf("cannot use env tag '%s' without value on field '%s' (use quotes if necessary)", s, fld.Name)
 				default:
 					result.name = unquoted(s)
 				}
+			} else {
+				return nil, fmt.Errorf("invalid tag '%s' on field '%s'", s, fld.Name)
 			}
 		}
 	}
@@ -380,24 +414,31 @@ func unquoted(s string) string {
 	return s
 }
 
-func checkFieldType(fld reflect.StructField, options *opts) (isPtr bool, custom CustomSetterOption, err error) {
+func checkFieldType(fld reflect.StructField, options *opts) (*fieldInfo, error) {
+	isPtr := false
 	k := fld.Type.Kind()
 	if isPtr = k == reflect.Pointer; isPtr {
 		k = fld.Type.Elem().Kind()
 	}
+	result := &fieldInfo{
+		pointer:   isPtr,
+		optional:  isPtr,
+		separator: ":",
+		delimiter: ",",
+	}
 	for _, c := range options.customs {
 		if ok := c.IsApplicable(fld); ok {
-			custom = c
-			break
+			result.customSetter = c
+			return result, nil
 		}
 	}
 	if isNativeType(k) {
-		return
+		return result, nil
 	}
 	switch k {
 	case reflect.Slice:
 		if isPtr {
-			err = fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
+			return nil, fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
 		} else {
 			// check slice item type...
 			it := fld.Type.Elem()
@@ -405,12 +446,12 @@ func checkFieldType(fld reflect.StructField, options *opts) (isPtr bool, custom 
 				it = it.Elem()
 			}
 			if !isNativeType(it.Kind()) {
-				err = fmt.Errorf("field '%s' has unsupported slice item type", fld.Name)
+				return nil, fmt.Errorf("field '%s' has unsupported slice item type", fld.Name)
 			}
 		}
 	case reflect.Map:
 		if isPtr {
-			err = fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
+			return nil, fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
 		} else {
 			// check map item type...
 			it := fld.Type.Elem()
@@ -418,25 +459,21 @@ func checkFieldType(fld reflect.StructField, options *opts) (isPtr bool, custom 
 				it = it.Elem()
 			}
 			if !isNativeType(it.Kind()) {
-				err = fmt.Errorf("field '%s' has unsupported map item type", fld.Name)
+				return nil, fmt.Errorf("field '%s' has unsupported map item type", fld.Name)
 			} else {
 				// check map key type...
 				it = fld.Type.Key()
 				if !isNativeType(it.Kind()) {
-					err = fmt.Errorf("field '%s' has unsupported map key type", fld.Name)
+					return nil, fmt.Errorf("field '%s' has unsupported map key type", fld.Name)
 				}
 			}
 		}
 	case reflect.Struct:
-		if isPtr {
-			err = fmt.Errorf("field '%s' has unsupported embedded struct ptr", fld.Name)
-		}
+		result.isStruct = true
 	default:
-		if custom == nil {
-			err = fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
-		}
+		return nil, fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
 	}
-	return
+	return result, nil
 }
 
 func isNativeType(k reflect.Kind) bool {
@@ -451,12 +488,15 @@ func isNativeType(k reflect.Kind) bool {
 }
 
 type fieldInfo struct {
-	name         string
-	optional     bool
-	pointer      bool
-	hasDefault   bool
-	defaultValue string
-	prefix       string
-	prefixedMap  bool
-	customSetter CustomSetterOption
+	name          string
+	optional      bool
+	pointer       bool
+	hasDefault    bool
+	defaultValue  string
+	prefix        string
+	isStruct      bool
+	isPrefixedMap bool
+	customSetter  CustomSetterOption
+	separator     string
+	delimiter     string
 }

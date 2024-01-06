@@ -95,6 +95,12 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			cfg: &struct {
+				BadTag string `env:"default=foo="`
+			}{},
+			expectError: "invalid tag 'default=foo=' on field 'BadTag'",
+		},
+		{
+			cfg: &struct {
 				Test string
 			}{},
 			options:     []any{&customLowercaseNaming{}},
@@ -146,6 +152,18 @@ func TestLoad(t *testing.T) {
 				"TEST": "foo",
 			},
 			expect: `{"Test":"foo"}`,
+		},
+		{
+			cfg: &struct {
+				Test string `env:"prefix"`
+			}{},
+			expectError: "cannot use env tag 'prefix' without value on field 'Test' (use quotes if necessary)",
+		},
+		{
+			cfg: &struct {
+				Test string `env:"default"`
+			}{},
+			expectError: "cannot use env tag 'default' without value on field 'Test' (use quotes if necessary)",
 		},
 		{
 			cfg: &struct {
@@ -474,6 +492,15 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			cfg: &struct {
+				Test []int `env:"delim=;"`
+			}{},
+			env: map[string]string{
+				"TEST": "1;2;3",
+			},
+			expect: `{"Test":[1,2,3]}`,
+		},
+		{
+			cfg: &struct {
 				Test []int `env:"optional,default='1,2,3'"`
 			}{},
 			expect: `{"Test":[1,2,3]}`,
@@ -502,6 +529,15 @@ func TestLoad(t *testing.T) {
 			}{},
 			env: map[string]string{
 				"TEST": "1:10,2:20",
+			},
+			expect: `{"Test":{"1":10,"2":20}}`,
+		},
+		{
+			cfg: &struct {
+				Test map[int]int `env:"delim=;,sep='='"`
+			}{},
+			env: map[string]string{
+				"TEST": "1=10;2=20",
 			},
 			expect: `{"Test":{"1":10,"2":20}}`,
 		},
@@ -618,9 +654,22 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			cfg: &struct {
-				Test *struct{}
+				Inner *struct {
+					Test string
+				} `env:"prefix=SUB"`
 			}{},
-			expectError: "field 'Test' has unsupported embedded struct ptr",
+			expectError: "missing env var 'SUB_TEST'",
+		},
+		{
+			cfg: &struct {
+				Inner *struct {
+					Test string
+				} `env:"prefix=SUB"`
+			}{},
+			env: map[string]string{
+				"SUB_TEST": "foo",
+			},
+			expect: `{"Inner":{"Test":"foo"}}`,
 		},
 		{
 			cfg: &struct {
@@ -687,6 +736,48 @@ func TestLoad(t *testing.T) {
 				Test string `env:"prefix=STUFF_"`
 			}{},
 			expectError: "cannot use env tag 'prefix' on field 'Test' (only for structs or map[string]string)",
+		},
+		{
+			cfg: &struct {
+				Test string
+			}{},
+			options:     []any{Expand(), Expand()},
+			expectError: "multiple expand options",
+		},
+		{
+			cfg: &struct {
+				Test string
+			}{},
+			env: map[string]string{
+				"TEST": "${FOO}-${BAR}",
+				"FOO":  "foo!",
+				"BAR":  "bar!",
+			},
+			options: []any{Expand()},
+			expect:  `{"Test":"foo!-bar!"}`,
+		},
+		{
+			cfg: &struct {
+				Test map[string]string `env:"prefix=SUB_"`
+			}{},
+			env: map[string]string{
+				"SUB_TEST": "${FOO}-${BAR}",
+				"FOO":      "foo!",
+				"BAR":      "bar!",
+			},
+			options: []any{Expand()},
+			expect:  `{"Test":{"TEST":"foo!-bar!"}}`,
+		},
+		{
+			cfg: &struct {
+				Test string
+			}{},
+			env: map[string]string{
+				"TEST": "${FOO}-${BAR}-${BAZ}",
+				"FOO":  "foo!",
+			},
+			options: []any{Expand(map[string]string{"BAR": "bar!"})},
+			expect:  `{"Test":"foo!-bar!-"}`,
 		},
 	}
 	for i, tc := range testCases {

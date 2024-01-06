@@ -71,6 +71,9 @@ func TestExample(t *testing.T) {
 	i := 1
 	b := true
 	f := 1.1
+	type inner struct {
+		Test string
+	}
 	testCases := []struct {
 		cfg         any
 		actual      bool
@@ -427,6 +430,31 @@ func TestExample(t *testing.T) {
 			},
 			actual: true,
 			expect: `TEST=foo
+`,
+		},
+		{
+			cfg: &struct {
+				Inner *inner `env:"prefix=SUB"`
+			}{},
+			actual: true,
+		},
+		{
+			cfg: &struct {
+				Inner *inner `env:"prefix=SUB"`
+			}{},
+			expect: `SUB_TEST=<string>
+`,
+		},
+		{
+			cfg: &struct {
+				Inner *inner `env:"prefix=SUB"`
+			}{
+				Inner: &inner{
+					Test: "foo",
+				},
+			},
+			actual: true,
+			expect: `SUB_TEST=foo
 `,
 		},
 	}
