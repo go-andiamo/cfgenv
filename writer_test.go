@@ -125,9 +125,23 @@ func TestExample(t *testing.T) {
 		},
 		{
 			cfg: &struct {
+				Test []string `env:"delimiter=;"`
+			}{},
+			expect: `TEST=value;value;...
+`,
+		},
+		{
+			cfg: &struct {
 				Test map[string]string
 			}{},
 			expect: `TEST=key:value,key:value,...
+`,
+		},
+		{
+			cfg: &struct {
+				Test map[string]string `env:"delimiter=;,separator=','"`
+			}{},
+			expect: `TEST=key,value;key,value;...
 `,
 		},
 		{
@@ -396,6 +410,18 @@ func TestExample(t *testing.T) {
 			},
 			actual: true,
 			expect: `TEST=foo:1.1
+`,
+		},
+		{
+			cfg: &struct {
+				Test map[string]float32 `env:"separator=','"`
+			}{
+				Test: map[string]float32{
+					"foo": 1.1,
+				},
+			},
+			actual: true,
+			expect: `TEST=foo,1.1
 `,
 		},
 		{

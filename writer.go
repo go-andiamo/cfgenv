@@ -145,9 +145,9 @@ func writeExampleValue(w io.Writer, name string, fv reflect.Value, fi *fieldInfo
 		case reflect.Float32, reflect.Float64:
 			eg = "0.0"
 		case reflect.Slice:
-			eg = "value,value,..."
+			eg = fmt.Sprintf("value%svalue%s...", fi.delimiter, fi.delimiter)
 		case reflect.Map:
-			eg = "key:value,key:value,..."
+			eg = fmt.Sprintf("key%svalue%skey%svalue%s...", fi.separator, fi.delimiter, fi.separator, fi.delimiter)
 		}
 	}
 	_, err := w.Write([]byte(name + "=" + eg + "\n"))
@@ -185,14 +185,14 @@ func writeActualValue(w io.Writer, name string, fv reflect.Value, fi *fieldInfo)
 				for i := 0; i < fv.Len(); i++ {
 					items = append(items, fmt.Sprintf("%v", fv.Index(i).Interface()))
 				}
-				eg = strings.Join(items, ",")
+				eg = strings.Join(items, fi.delimiter)
 			case reflect.Map:
 				items := make([]string, 0)
 				for _, mk := range fv.MapKeys() {
 					mv := fv.MapIndex(mk)
-					items = append(items, fmt.Sprintf("%v:%v", mk.Interface(), mv.Interface()))
+					items = append(items, fmt.Sprintf("%v%s%v", mk.Interface(), fi.separator, mv.Interface()))
 				}
-				eg = strings.Join(items, ",")
+				eg = strings.Join(items, fi.delimiter)
 			}
 		}
 	}
