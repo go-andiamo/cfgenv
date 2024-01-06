@@ -1,6 +1,7 @@
 package cfgenv
 
 import (
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -117,3 +118,42 @@ func (d *dateTimeSetterOption) Set(fld reflect.StructField, v reflect.Value, raw
 }
 
 var dtType = reflect.TypeOf(time.Time{})
+
+// Expand creates a default ExpandOption (for use in Load / LoadAs)
+//
+// Any supplied lookup maps are checked first - if a given env var name, e.g. "${FOO}", is
+// not found in lookups then the value is taken from env var
+func Expand(lookups ...map[string]string) ExpandOption {
+	return &expandOpt{
+		lookups: lookups,
+	}
+}
+
+// ExpandOption is an option that can be passed to Load or LoadAs
+// and provides support for expanding environment var values like...
+//
+//	FOO=${BAR}
+type ExpandOption interface {
+	// Expand expands the env var value s
+	Expand(s string) string
+}
+
+type expandOpt struct {
+	lookups []map[string]string
+}
+
+func (e *expandOpt) Expand(s string) string {
+	return os.Expand(s, e.expand)
+}
+
+func (e *expandOpt) expand(s string) string {
+	for _, m := range e.lookups {
+		if v, ok := m[s]; ok {
+			return e.Expand(v)
+		}
+	}
+	if v, ok := os.LookupEnv(s); ok {
+		return e.Expand(v)
+	}
+	return ""
+}

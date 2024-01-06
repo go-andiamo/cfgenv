@@ -67,16 +67,19 @@ To update cfgenv to the latest version, run:
 
 Fields in config structs can use the `env` tag to override cfgenv loading behaviour
 
-| Tag                 | Purpose                                                                                                           |
-|---------------------|-------------------------------------------------------------------------------------------------------------------|
-| `env:"MY"`          | overrides the environment var name to read with `MY`                                                              |
-| `env:"optional"`    | denotes the environment var is optional                                                                           |
-| `env:"default=foo"` | denotes the default value if the environment var is missing                                                       |
-| `env:"prefix=SUB"`  | _(on a struct field)_ denotes all fields on the embedded struct will load from env var names prefixed with `SUB_` |
-| `env:"prefix=SUB_"` | _(on a `map[string]string` field)_ denotes the map will read all env vars whose name starts with `SUB_`           |
+| Tag                                    | Purpose                                                                                                           |
+|----------------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| `env:"MY"`                             | overrides the environment var name to read with `MY`                                                              |
+| `env:"optional"`                       | denotes the environment var is optional                                                                           |
+| `env:"default=foo"`                    | denotes the default value if the environment var is missing                                                       |
+| `env:"prefix=SUB"`                     | _(on a struct field)_ denotes all fields on the embedded struct will load from env var names prefixed with `SUB_` |
+| `env:"prefix=SUB_"`                    | _(on a `map[string]string` field)_ denotes the map will read all env vars whose name starts with `SUB_`           |
+| `env:"delimiter=;"`<br>`env:"delim=;"` | _(on `slice` and `map` fields)_ denotes the character used to delimit items<br>_(the default is `,`)_             |
+| `env:"separator=:"`<br>`env:"sep=:"`   | _(on `map` fields)_ denotes the character used to separate key and value<br>_(the default is `:`)_                |
+
 
 ## Options
-When loading config from environment vars, several option interfaces can be passed to `cfgenv.Load` to alter the names of expected environment vars
+When loading config from environment vars, several option interfaces can be passed to `cfgenv.Load()` function to alter the names of expected environment vars
 or provide support for extra field types.
 
 <details>
@@ -227,6 +230,18 @@ DB.port=33601
 DB.username=root
 DB.password=root
 ```
+</details>
+<br>
+<details>
+    <summary><code>cfgenv.ExpandOption</code></summary>
+
+### `cfgenv.ExpandOption`
+Providing an <code>cfgenv.ExpandOption</code> to the <code>cfgenv.Load()</code> function allows support for resolving substitute environment variables - e.g. `EXAMPLE=${FOO}-{$BAR}` 
+
+<em>Use the <code>Expand()</code> function - or implement your own <code>ExpandOption</code></em>
+
+Example - see [expand_option](https://github.com/go-andiamo/cfgenv/tree/main/_examples/expand_option)
+
 </details>
 <br>
 <details>

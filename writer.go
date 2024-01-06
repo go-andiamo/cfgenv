@@ -95,19 +95,28 @@ func writeValue(w io.Writer, v reflect.Value, prefix string, actual bool, option
 			name := options.naming.BuildName(prefix, options.separator.GetSeparator(), fld, fi.name)
 			if !seen[name] {
 				seen[name] = true
-				if fld.Type.Kind() == reflect.Struct {
+				if fi.isStruct {
 					fv := v.Field(f)
+					if fi.pointer {
+						if fv.IsNil() && actual {
+							continue
+						} else if fv.IsNil() {
+							fv = reflect.New(fv.Type().Elem()).Elem()
+						} else {
+							fv = fv.Elem()
+						}
+					}
 					pfx := addPrefixes(prefix, fi.prefix, options.separator.GetSeparator())
 					if err = write(w, fv, pfx, actual, options); err != nil {
 						return err
 					}
 				} else if !actual {
-					if !fi.prefixedMap {
+					if !fi.isPrefixedMap {
 						if err = writeExampleValue(w, name, v.Field(f), fi); err != nil {
 							return err
 						}
 					}
-				} else if fi.prefixedMap {
+				} else if fi.isPrefixedMap {
 					m := v.Field(f).Interface().(map[string]string)
 					for k, v := range m {
 						added[k] = v
