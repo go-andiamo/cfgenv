@@ -82,19 +82,19 @@ func TestDefaultNamingOption(t *testing.T) {
 
 func TestExpand(t *testing.T) {
 	ex := Expand()
-	v := ex.Expand("${FOO}-${BAR}")
+	v := ex.Expand("${FOO}-${BAR}", nil)
 	assert.Equal(t, "-", v)
 	_ = os.Setenv("FOO", "a")
 	_ = os.Setenv("BAR", "b")
-	v = ex.Expand("${FOO}-${BAR}")
+	v = ex.Expand("${FOO}-${BAR}", nil)
 	assert.Equal(t, "a-b", v)
 
 	_ = os.Setenv("FOO", "${BAZ}")
 	_ = os.Setenv("BAZ", "baz!")
-	v = ex.Expand("${FOO}-${BAR}")
+	v = ex.Expand("${FOO}-${BAR}", nil)
 	assert.Equal(t, "baz!-b", v)
 
 	ex = Expand(map[string]string{"FOO": "foo!"}, map[string]string{"BAR": "bar!"})
-	v = ex.Expand("${FOO}-${BAR}")
+	v = ex.Expand("${FOO}-${BAR}", nil)
 	assert.Equal(t, "foo!-bar!", v)
 }

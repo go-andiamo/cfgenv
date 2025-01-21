@@ -12,6 +12,7 @@ Struct field types supported:
 * `map[K]V` where `K` is _native type_ and `V` is _native type_ or _pointer native type_
 * embedded structs
 * other types can be handled by providing a `cfgenv.CustomerSetterOption`
+* load config from environment variables or from file (e.g. `.env` file) or any other `io.Reader`
 
 Example:
 
@@ -252,6 +253,53 @@ Provides support for custom struct field types
 
 Example - see [custom_setter_option](https://github.com/go-andiamo/cfgenv/tree/main/_examples/custom_setter_option)
 </details>
+<br>
+<details>
+    <summary><code>cfgenv.EnvReader</code></summary>
+
+### `cfgenv.EnvReader`
+Reads environment vars from specified reader (e.g. `cfgenv.NewEnvFileReader()`)
+
+Example:
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/go-andiamo/cfgenv"
+    "os"
+)
+
+type Config struct {
+    ServiceName string
+}
+
+func main() {
+    cfg := &Config{}
+    f, err := os.Open("local.env")
+    if err != nil {
+        panic(err)
+    }
+    defer f.Close()
+    err = cfgenv.Load(cfg, cfgenv.NewEnvFileReader(f, nil))
+    if err != nil {
+        panic(err)
+    } else {
+        fmt.Printf("%+v\n", cfg)
+    }
+}
+```
+where file `local.env` looks like...
+```
+# this is the service name...
+SERVICE_NAME=foo
+```
+
+</details>
+
+
+
 
 ## Write Example
 Cfgenv can also write examples and current config using the `cfgenv.Example()` or `cfgenv.Write()` functions.
