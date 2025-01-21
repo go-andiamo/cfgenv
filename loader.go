@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-andiamo/splitter"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -54,54 +53,52 @@ func buildOpts(options ...any) (*opts, error) {
 		prefix:    NewPrefix(""),
 		separator: NewSeparator("_"),
 		naming:    defaultNamingOption,
+		reader:    defaultReader,
 	}
-	countPfx := 0
-	countSep := 0
-	countNm := 0
-	countExpand := 0
+	pfx := false
+	sep := false
+	name := false
+	expand := false
+	reader := false
 	for _, o := range options {
 		if o != nil {
-			used := false
-			if pfx, ok := o.(PrefixOption); ok {
-				used = true
-				result.prefix = pfx
-				countPfx++
-			}
-			if sep, ok := o.(SeparatorOption); ok {
-				used = true
-				result.separator = sep
-				countSep++
-			}
-			if nm, ok := o.(NamingOption); ok {
-				used = true
-				result.naming = nm
-				countNm++
-			}
-			if ex, ok := o.(ExpandOption); ok {
-				used = true
-				result.expand = ex
-				countExpand++
-			}
-			if cs, ok := o.(CustomSetterOption); ok {
-				used = true
-				result.customs = append(result.customs, cs)
-			}
-			if !used {
+			switch ot := o.(type) {
+			case PrefixOption:
+				if pfx {
+					return nil, errors.New("multiple prefix options")
+				}
+				result.prefix = ot
+				pfx = true
+			case SeparatorOption:
+				if sep {
+					return nil, errors.New("multiple separator options")
+				}
+				result.separator = ot
+				sep = true
+			case NamingOption:
+				if name {
+					return nil, errors.New("multiple naming options")
+				}
+				result.naming = ot
+				name = true
+			case ExpandOption:
+				if expand {
+					return nil, errors.New("multiple expand options")
+				}
+				result.expand = ot
+				expand = true
+			case EnvReader:
+				if reader {
+					return nil, errors.New("multiple reader options")
+				}
+				result.reader = ot
+				reader = true
+			case CustomSetterOption:
+				result.customs = append(result.customs, ot)
+			default:
 				return nil, errors.New("invalid option")
 			}
 		}
-	}
-	if countPfx > 1 {
-		return nil, errors.New("multiple prefix options")
-	}
-	if countSep > 1 {
-		return nil, errors.New("multiple separator options")
-	}
-	if countNm > 1 {
-		return nil, errors.New("multiple naming options")
-	}
-	if countExpand > 1 {
-		return nil, errors.New("multiple expand options")
 	}
 	return result, nil
 }
@@ -112,6 +109,7 @@ type opts struct {
 	naming    NamingOption
 	expand    ExpandOption
 	customs   []CustomSetterOption
+	reader    EnvReader
 }
 
 func loadStruct(v reflect.Value, prefix string, options *opts) error {
@@ -124,7 +122,7 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 			}
 			name := options.naming.BuildName(prefix, options.separator.GetSeparator(), fld, fi.name)
 			if fi.customSetter != nil {
-				raw, ok := os.LookupEnv(name)
+				raw, ok := options.reader.LookupEnv(name)
 				if !ok && !fi.optional {
 					return fmt.Errorf("missing env var '%s'", name)
 				} else if !ok && fi.hasDefault {
@@ -148,7 +146,7 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 					return err
 				}
 			} else {
-				raw, ok := os.LookupEnv(name)
+				raw, ok := options.reader.LookupEnv(name)
 				if !ok && !fi.optional {
 					return fmt.Errorf("missing env var '%s'", name)
 				} else if !ok && fi.hasDefault {
@@ -157,7 +155,7 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 					continue
 				}
 				if options.expand != nil {
-					raw = options.expand.Expand(raw)
+					raw = options.expand.Expand(raw, options.reader)
 				}
 				if err = setValue(name, raw, fld, fi, v.Field(f)); err != nil {
 					return err
@@ -258,11 +256,11 @@ func setMap(name string, raw string, fld reflect.StructField, fi *fieldInfo, fv 
 
 func setPrefixMap(fv reflect.Value, prefix string, options *opts) {
 	m := map[string]string{}
-	for _, e := range os.Environ() {
+	for _, e := range options.reader.Environ() {
 		if strings.HasPrefix(e, prefix) {
 			ev := strings.SplitN(e, "=", 2)
 			if options.expand != nil {
-				m[ev[0][len(prefix):]] = options.expand.Expand(ev[1])
+				m[ev[0][len(prefix):]] = options.expand.Expand(ev[1], options.reader)
 			} else {
 				m[ev[0][len(prefix):]] = ev[1]
 			}

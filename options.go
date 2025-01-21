@@ -135,25 +135,30 @@ func Expand(lookups ...map[string]string) ExpandOption {
 //	FOO=${BAR}
 type ExpandOption interface {
 	// Expand expands the env var value s
-	Expand(s string) string
+	Expand(s string, er EnvReader) string
 }
 
 type expandOpt struct {
 	lookups []map[string]string
 }
 
-func (e *expandOpt) Expand(s string) string {
-	return os.Expand(s, e.expand)
+func (e *expandOpt) Expand(s string, er EnvReader) string {
+	if er == nil {
+		er = defaultReader
+	}
+	return os.Expand(s, func(s string) string {
+		return e.expand(s, er)
+	})
 }
 
-func (e *expandOpt) expand(s string) string {
+func (e *expandOpt) expand(s string, er EnvReader) string {
 	for _, m := range e.lookups {
 		if v, ok := m[s]; ok {
-			return e.Expand(v)
+			return e.Expand(v, er)
 		}
 	}
-	if v, ok := os.LookupEnv(s); ok {
-		return e.Expand(v)
+	if v, ok := er.LookupEnv(s); ok {
+		return e.Expand(v, er)
 	}
 	return ""
 }
