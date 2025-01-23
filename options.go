@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // PrefixOption is an option that can be passed to Load or LoadAs
@@ -79,45 +78,6 @@ func toSnakeCase(str string) string {
 	snake = matchAllCap.ReplaceAllString(snake, "${1}_${2}")
 	return strings.ToUpper(snake)
 }
-
-// CustomSetterOption is an option that can be passed to Load or LoadAs
-// and provides support for reading additional struct field types
-type CustomSetterOption interface {
-	// IsApplicable should return true if the fld type is supported by this custom setter
-	IsApplicable(fld reflect.StructField) bool
-	// Set sets the field value `v` using the environment var `raw` value
-	Set(fld reflect.StructField, v reflect.Value, raw string) error
-}
-
-type dateTimeSetterOption struct {
-	format string
-}
-
-func NewDatetimeSetter(format string) CustomSetterOption {
-	if format == "" {
-		return &dateTimeSetterOption{
-			format: time.RFC3339,
-		}
-	}
-	return &dateTimeSetterOption{
-		format: format,
-	}
-}
-
-func (d *dateTimeSetterOption) IsApplicable(fld reflect.StructField) bool {
-	return fld.Type == dtType
-}
-
-func (d *dateTimeSetterOption) Set(fld reflect.StructField, v reflect.Value, raw string) error {
-	dt, err := time.Parse(d.format, raw)
-	if err != nil {
-		return err
-	}
-	v.Set(reflect.ValueOf(dt))
-	return nil
-}
-
-var dtType = reflect.TypeOf(time.Time{})
 
 // Expand creates a default ExpandOption (for use in Load / LoadAs)
 //

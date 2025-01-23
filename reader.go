@@ -8,7 +8,9 @@ import (
 )
 
 type EnvReader interface {
+	// LookupEnv see os.LookupEnv
 	LookupEnv(key string) (string, bool)
+	// Environ see os.Environ
 	Environ() []string
 }
 
@@ -37,6 +39,7 @@ type envFileReader struct {
 
 var _ EnvReader = (*envFileReader)(nil)
 
+// NewEnvFileReader creates a new EnvReader that reads from a file (or any other io.Reader)
 func NewEnvFileReader(f io.Reader, errHandler func(err error)) EnvReader {
 	eh := errHandler
 	if eh == nil {
@@ -100,4 +103,22 @@ func (e *envFileReader) readLine(line string) {
 		}
 	}
 	return
+}
+
+// MapEnvReader is a map[string]string that implements the EnvReader interface
+type MapEnvReader map[string]string
+
+var _ EnvReader = MapEnvReader{}
+
+func (m MapEnvReader) LookupEnv(key string) (string, bool) {
+	v, ok := m[key]
+	return v, ok
+}
+
+func (m MapEnvReader) Environ() []string {
+	result := make([]string, 0, len(m))
+	for k, v := range m {
+		result = append(result, k+"="+v)
+	}
+	return result
 }
