@@ -1,6 +1,7 @@
 package cfgenv
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ func TestLoadAs(t *testing.T) {
 	type cfg struct {
 		Test string `env:"optional,default=foo"`
 	}
+	os.Clearenv()
 	c, err := LoadAs[cfg]()
 	assert.NoError(t, err)
 	assert.Equal(t, "foo", c.Test)
@@ -353,7 +355,7 @@ func TestLoad(t *testing.T) {
 			env: map[string]string{
 				"TEST": "foo",
 			},
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -371,7 +373,7 @@ func TestLoad(t *testing.T) {
 			env: map[string]string{
 				"TEST": "foo",
 			},
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -389,7 +391,7 @@ func TestLoad(t *testing.T) {
 			env: map[string]string{
 				"TEST": "foo",
 			},
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -407,7 +409,7 @@ func TestLoad(t *testing.T) {
 			env: map[string]string{
 				"TEST": "foo",
 			},
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -425,7 +427,7 @@ func TestLoad(t *testing.T) {
 			env: map[string]string{
 				"TEST": "foo",
 			},
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -779,6 +781,108 @@ func TestLoad(t *testing.T) {
 			options: []any{Expand(map[string]string{"BAR": "bar!"})},
 			expect:  `{"Test":"foo!-bar!-"}`,
 		},
+		{
+			cfg: &struct {
+				Test string `env:"match=''"`
+			}{},
+			expectError: "cannot use env tag 'match' on field 'Test' (only for map[string]string)",
+		},
+		{
+			cfg: &struct {
+				Test map[string]string `env:"match='['"`
+			}{},
+			expectError: "env tag 'match' on field 'Test' - invalid regexp: error parsing regexp: missing closing ]: `[`",
+		},
+		{
+			cfg: &struct {
+				Test map[string]string `env:"match='[0-9]{3}'"`
+			}{},
+			env: map[string]string{
+				"TEST":    "",
+				"TEST000": "test",
+				"FOO123":  "foo",
+			},
+			expect: `{"Test":{"FOO123":"foo","TEST000":"test"}}`,
+		},
+		{
+			cfg: &struct {
+				Test map[string]string `env:"match='[0-9]{3}'"`
+			}{},
+			env: map[string]string{
+				"TEST":    "blah-blah",
+				"TEST000": "${TEST}",
+				"FOO123":  "foo",
+			},
+			options: []any{Expand()},
+			expect:  `{"Test":{"FOO123":"foo","TEST000":"blah-blah"}}`,
+		},
+		{
+			cfg: &struct {
+				Test map[string]string `env:"match='[0-9]{3}',prefix=TEST"`
+			}{},
+			env: map[string]string{
+				"TEST":    "blah-blah",
+				"TEST000": "test",
+				"FOO123":  "foo",
+			},
+			options: []any{},
+			expect:  `{"Test":{"000":"test"}}`,
+		},
+		{
+			cfg: &struct {
+				Test map[string]string `env:"match='[0-9]{3}',prefix=TEST"`
+			}{},
+			env: map[string]string{
+				"TEST":    "blah-blah",
+				"TEST000": "${TEST}",
+				"FOO123":  "foo",
+			},
+			options: []any{Expand()},
+			expect:  `{"Test":{"000":"blah-blah"}}`,
+		},
+		{
+			cfg: &struct {
+				Test []byte
+			}{},
+			env: map[string]string{
+				"TEST": "foo",
+			},
+			expect: `{"Test":"Zm9v"}`,
+		},
+		{
+			cfg: &struct {
+				Test string `env:"encoding=unknown"`
+			}{},
+			expectError: "unknown encoding 'unknown' on field 'Test'",
+		},
+		{
+			cfg: &struct {
+				Test string `env:"encoding=base64"`
+			}{},
+			env: map[string]string{
+				"TEST": base64.StdEncoding.EncodeToString([]byte("foo")),
+			},
+			expect: `{"Test":"foo"}`,
+		},
+		{
+			cfg: &struct {
+				Test string `env:"encoding=base64"`
+			}{},
+			options: []any{NewBase64Decoder()},
+			env: map[string]string{
+				"TEST": base64.StdEncoding.EncodeToString([]byte("foo")),
+			},
+			expect: `{"Test":"foo"}`,
+		},
+		{
+			cfg: &struct {
+				Test string `env:"encoding=base64"`
+			}{},
+			env: map[string]string{
+				"TEST": "not encoded properly",
+			},
+			expectError: "unable to decode env var 'TEST' (encoding: 'base64'): illegal base64 data at input byte 3",
+		},
 	}
 	for i, tc := range testCases {
 		t.Run(fmt.Sprintf("[%d]", i+1), func(t *testing.T) {
@@ -813,7 +917,7 @@ func (ct *testCustomSetter) IsApplicable(fld reflect.StructField) bool {
 	return fld.Type == customType
 }
 
-func (ct *testCustomSetter) Set(fld reflect.StructField, v reflect.Value, raw string) error {
+func (ct *testCustomSetter) Set(fld reflect.StructField, v reflect.Value, raw string, present bool) error {
 	if ct.err != nil {
 		return ct.err
 	}
@@ -828,13 +932,13 @@ func TestLoad_WithCustomSetter(t *testing.T) {
 	os.Clearenv()
 
 	type MyConfig struct {
-		Test1 []byte `env:"optional,default='1,2,3'"`
-		Test2 custom `env:"optional,default=foo"`
+		Test1 []byte `env:"optional,default='foo'"`
+		Test2 custom `env:"optional,default='foo'"`
 	}
 	cfg := &MyConfig{}
 	err := Load(cfg, &testCustomSetter{})
 	assert.NoError(t, err)
-	assert.Equal(t, []byte{1, 2, 3}, cfg.Test1)
+	assert.Equal(t, []byte{'f', 'o', 'o'}, cfg.Test1)
 	assert.Equal(t, custom("foo"), cfg.Test2)
 
 	err = Load(cfg, &testCustomSetter{err: errors.New("fooey")})
@@ -1102,7 +1206,7 @@ func TestLoadFile(t *testing.T) {
 				Test uint
 			}{},
 			env:         `TEST=foo`,
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -1116,7 +1220,7 @@ func TestLoadFile(t *testing.T) {
 				Test uint8
 			}{},
 			env:         `TEST=foo`,
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -1130,7 +1234,7 @@ func TestLoadFile(t *testing.T) {
 				Test uint16
 			}{},
 			env:         `TEST=foo`,
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -1144,7 +1248,7 @@ func TestLoadFile(t *testing.T) {
 				Test uint32
 			}{},
 			env:         `TEST=foo`,
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {
@@ -1158,7 +1262,7 @@ func TestLoadFile(t *testing.T) {
 				Test uint64
 			}{},
 			env:         `TEST=foo`,
-			expectError: "env var 'TEST' is not an uint",
+			expectError: "env var 'TEST' is not a uint",
 		},
 		{
 			cfg: &struct {

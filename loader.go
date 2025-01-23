@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/go-andiamo/splitter"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +15,7 @@ import (
 //
 // the type of T must be a struct
 //
-// Use any options (such as PrefixOption, SeparatorOption, NamingOption or multiple CustomSetterOption) to alter
+// Use any options (such as PrefixOption, SeparatorOption, NamingOption, EnvReader, Decoder or multiple CustomSetterOption) to alter
 // loading behaviour
 func LoadAs[T any](options ...any) (*T, error) {
 	var cfg T
@@ -29,7 +30,7 @@ func LoadAs[T any](options ...any) (*T, error) {
 //
 // the supplied cfg arg must be a pointer to a struct
 //
-// Use any options (such as PrefixOption, SeparatorOption, NamingOption or multiple CustomSetterOption) to alter
+// Use any options (such as PrefixOption, SeparatorOption, NamingOption, EnvReader, Decoder or multiple CustomSetterOption) to alter
 // loading behaviour
 func Load(cfg any, options ...any) error {
 	o, err := buildOpts(options...)
@@ -53,7 +54,13 @@ func buildOpts(options ...any) (*opts, error) {
 		prefix:    NewPrefix(""),
 		separator: NewSeparator("_"),
 		naming:    defaultNamingOption,
-		reader:    defaultReader,
+		decoders: map[string]Decoder{
+			encodingBase64:       NewBase64Decoder(),
+			encodingBase64Url:    NewBase64UrlDecoder(),
+			encodingRawBase64:    NewRawBase64Decoder(),
+			encodingRawBase64Url: NewRawBase64UrlDecoder(),
+		},
+		reader: defaultReader,
 	}
 	pfx := false
 	sep := false
@@ -95,6 +102,8 @@ func buildOpts(options ...any) (*opts, error) {
 				reader = true
 			case CustomSetterOption:
 				result.customs = append(result.customs, ot)
+			case Decoder:
+				result.decoders[ot.Encoding()] = ot
 			default:
 				return nil, errors.New("invalid option")
 			}
@@ -109,6 +118,7 @@ type opts struct {
 	naming    NamingOption
 	expand    ExpandOption
 	customs   []CustomSetterOption
+	decoders  map[string]Decoder
 	reader    EnvReader
 }
 
@@ -121,20 +131,52 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				return err
 			}
 			name := options.naming.BuildName(prefix, options.separator.GetSeparator(), fld, fi.name)
-			if fi.customSetter != nil {
+			switch {
+			case fi.optionalSetter != nil:
+				if raw, ok := options.reader.LookupEnv(name); ok {
+					if options.expand != nil {
+						raw = options.expand.Expand(raw, options.reader)
+					}
+					if fi.decoder != nil {
+						if raw, err = fi.decoder.Decode(raw); err != nil {
+							return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
+						}
+					}
+					if err = fi.optionalSetter(v.Field(f), raw, true); err != nil {
+						return err
+					}
+				} else if fi.hasDefault {
+					if err = fi.optionalSetter(v.Field(f), fi.defaultValue, false); err != nil {
+						return err
+					}
+				}
+			case fi.customSetter != nil:
 				raw, ok := options.reader.LookupEnv(name)
 				if !ok && !fi.optional {
 					return fmt.Errorf("missing env var '%s'", name)
 				} else if !ok && fi.hasDefault {
 					raw = fi.defaultValue
 				}
-				if err = fi.customSetter.Set(fld, v.Field(f), raw); err != nil {
+				if options.expand != nil {
+					raw = options.expand.Expand(raw, options.reader)
+				}
+				if ok && fi.decoder != nil {
+					if raw, err = fi.decoder.Decode(raw); err != nil {
+						return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
+					}
+				}
+				if err = fi.customSetter.Set(fld, v.Field(f), raw, ok); err != nil {
 					return err
 				}
-			} else if fi.isPrefixedMap {
+			case fi.isMatchedMap && fi.isPrefixedMap:
+				pfx := addPrefixes(prefix, fi.prefix, options.separator.GetSeparator())
+				setPrefixMatchMap(v.Field(f), fi.matchRegex, pfx, options)
+			case fi.isMatchedMap:
+				setMatchMap(v.Field(f), fi.matchRegex, options)
+			case fi.isPrefixedMap:
 				pfx := addPrefixes(prefix, fi.prefix, options.separator.GetSeparator())
 				setPrefixMap(v.Field(f), pfx, options)
-			} else if fi.isStruct {
+			case fi.isStruct:
 				fv := v.Field(f)
 				if fi.pointer {
 					fvp := reflect.New(fv.Type().Elem())
@@ -145,7 +187,7 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				if err = loadStruct(fv, pfx, options); err != nil {
 					return err
 				}
-			} else {
+			default:
 				raw, ok := options.reader.LookupEnv(name)
 				if !ok && !fi.optional {
 					return fmt.Errorf("missing env var '%s'", name)
@@ -156,6 +198,11 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				}
 				if options.expand != nil {
 					raw = options.expand.Expand(raw, options.reader)
+				}
+				if ok && fi.decoder != nil {
+					if raw, err = fi.decoder.Decode(raw); err != nil {
+						return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
+					}
 				}
 				if err = setValue(name, raw, fld, fi, v.Field(f)); err != nil {
 					return err
@@ -216,6 +263,11 @@ func setValue(name string, raw string, fld reflect.StructField, fi *fieldInfo, f
 
 func setSlice(name string, raw string, fld reflect.StructField, fi *fieldInfo, fv reflect.Value) error {
 	if raw != "" {
+		if fld.Type.Elem().Kind() == reflect.Uint8 {
+			sl := []byte(raw)
+			fv.Set(reflect.ValueOf(sl))
+			return nil
+		}
 		vs := strings.Split(raw, fi.delimiter)
 		sl := reflect.MakeSlice(fv.Type(), len(vs), len(vs))
 		for i, v := range vs {
@@ -269,6 +321,38 @@ func setPrefixMap(fv reflect.Value, prefix string, options *opts) {
 	fv.Set(reflect.ValueOf(m))
 }
 
+func setPrefixMatchMap(fv reflect.Value, rx *regexp.Regexp, prefix string, options *opts) {
+	m := map[string]string{}
+	for _, e := range options.reader.Environ() {
+		if strings.HasPrefix(e, prefix) {
+			ev := strings.SplitN(e, "=", 2)
+			if name := ev[0][len(prefix):]; rx.MatchString(name) {
+				if options.expand != nil {
+					m[name] = options.expand.Expand(ev[1], options.reader)
+				} else {
+					m[name] = ev[1]
+				}
+			}
+		}
+	}
+	fv.Set(reflect.ValueOf(m))
+}
+
+func setMatchMap(fv reflect.Value, rx *regexp.Regexp, options *opts) {
+	m := map[string]string{}
+	for _, e := range options.reader.Environ() {
+		ev := strings.SplitN(e, "=", 2)
+		if rx.MatchString(ev[0]) {
+			if options.expand != nil {
+				m[ev[0]] = options.expand.Expand(ev[1], options.reader)
+			} else {
+				m[ev[0]] = ev[1]
+			}
+		}
+	}
+	fv.Set(reflect.ValueOf(m))
+}
+
 func setStringValue(raw string, fv reflect.Value, isPtr bool) {
 	if isPtr {
 		fv.Set(reflect.ValueOf(&raw))
@@ -314,7 +398,7 @@ func setUintValue[T uint | uint8 | uint16 | uint32 | uint64](name string, raw st
 		}
 		return nil
 	} else {
-		return fmt.Errorf("env var '%s' is not an uint", name)
+		return fmt.Errorf("env var '%s' is not a uint", name)
 	}
 }
 
@@ -353,6 +437,18 @@ var tagSplitter = splitter.MustCreateSplitter(',', splitter.DoubleQuotes, splitt
 var eqSplitter = splitter.MustCreateSplitter('=', splitter.DoubleQuotes, splitter.SingleQuotes).
 	AddDefaultOptions(splitter.Trim(" "))
 
+const (
+	tokenDefault   = "default"
+	tokenPrefix    = "prefix"
+	tokenMatch     = "match"
+	tokenSeparator = "separator"
+	tokenSep       = "sep"
+	tokenDelimiter = "delimiter"
+	tokenDelim     = "delim"
+	tokenOptional  = "optional"
+	tokenEncoding  = "encoding"
+)
+
 func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
 	result, err := checkFieldType(fld, options)
 	if err != nil {
@@ -366,11 +462,11 @@ func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
 		for _, s := range parts {
 			if pts, _ := eqSplitter.Split(s); len(pts) == 2 {
 				switch pts[0] {
-				case "default":
+				case tokenDefault:
 					result.hasDefault = true
 					result.defaultValue = unquoted(pts[1])
 					continue
-				case "prefix":
+				case tokenPrefix:
 					result.prefix = pts[1]
 					if fld.Type.Kind() == reflect.Map {
 						result.isPrefixedMap = fld.Type.Elem().Kind() == reflect.String && fld.Type.Key().Kind() == reflect.String
@@ -379,19 +475,38 @@ func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
 						return nil, fmt.Errorf("cannot use env tag 'prefix' on field '%s' (only for structs or map[string]string)", fld.Name)
 					}
 					continue
-				case "separator", "sep":
+				case tokenMatch:
+					if fld.Type.Kind() == reflect.Map {
+						result.isMatchedMap = fld.Type.Elem().Kind() == reflect.String && fld.Type.Key().Kind() == reflect.String
+					}
+					if !result.isMatchedMap {
+						return nil, fmt.Errorf("cannot use env tag 'match' on field '%s' (only for map[string]string)", fld.Name)
+					}
+					rxs := unquoted(pts[1])
+					if result.matchRegex, err = regexp.Compile(rxs); err != nil {
+						return nil, fmt.Errorf("env tag 'match' on field '%s' - invalid regexp: %s", fld.Name, err.Error())
+					}
+					continue
+				case tokenSeparator, tokenSep:
 					result.separator = unquoted(pts[1])
 					continue
-				case "delimiter", "delim":
+				case tokenDelimiter, tokenDelim:
 					result.delimiter = unquoted(pts[1])
 					continue
+				case tokenEncoding:
+					if dec, ok := options.decoders[pts[1]]; ok {
+						result.decoder = dec
+						continue
+					} else {
+						return nil, fmt.Errorf("unknown encoding '%s' on field '%s'", pts[1], fld.Name)
+					}
 				}
 				return nil, fmt.Errorf("invalid tag '%s' on field '%s'", s, fld.Name)
 			} else if len(pts) == 1 {
 				switch s {
-				case "optional":
+				case tokenOptional:
 					result.optional = true
-				case "default", "prefix", "separator", "sep", "delimiter", "delim":
+				case tokenDefault, tokenPrefix, tokenSeparator, tokenSep, tokenDelimiter, tokenDelim, tokenMatch, tokenEncoding:
 					return nil, fmt.Errorf("cannot use env tag '%s' without value on field '%s' (use quotes if necessary)", s, fld.Name)
 				default:
 					result.name = unquoted(s)
@@ -429,6 +544,11 @@ func checkFieldType(fld reflect.StructField, options *opts) (*fieldInfo, error) 
 			result.customSetter = c
 			return result, nil
 		}
+	}
+	if setFn, ok := optionalTypeSetters[fld.Type]; ok {
+		result.optional = true
+		result.optionalSetter = setFn
+		return result, nil
 	}
 	if isNativeType(k) {
 		return result, nil
@@ -486,15 +606,19 @@ func isNativeType(k reflect.Kind) bool {
 }
 
 type fieldInfo struct {
-	name          string
-	optional      bool
-	pointer       bool
-	hasDefault    bool
-	defaultValue  string
-	prefix        string
-	isStruct      bool
-	isPrefixedMap bool
-	customSetter  CustomSetterOption
-	separator     string
-	delimiter     string
+	name           string
+	optional       bool
+	pointer        bool
+	hasDefault     bool
+	defaultValue   string
+	prefix         string
+	isStruct       bool
+	isPrefixedMap  bool
+	isMatchedMap   bool
+	matchRegex     *regexp.Regexp
+	customSetter   CustomSetterOption
+	optionalSetter optionalSetterFn
+	decoder        Decoder
+	separator      string
+	delimiter      string
 }
