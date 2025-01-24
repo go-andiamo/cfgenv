@@ -125,7 +125,12 @@ type opts struct {
 func loadStruct(v reflect.Value, prefix string, options *opts) error {
 	t := v.Type()
 	for f := 0; f < t.NumField(); f++ {
-		if fld := t.Field(f); fld.IsExported() {
+		if fld := t.Field(f); fld.Anonymous {
+			ev := v.Field(f)
+			if err := loadStruct(ev, prefix, options); err != nil {
+				return err
+			}
+		} else if fld.IsExported() {
 			fi, err := getFieldInfo(fld, options)
 			if err != nil {
 				return err
@@ -447,6 +452,7 @@ const (
 	tokenDelim     = "delim"
 	tokenOptional  = "optional"
 	tokenEncoding  = "encoding"
+	tokenName      = "name"
 )
 
 func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
@@ -462,6 +468,9 @@ func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
 		for _, s := range parts {
 			if pts, _ := eqSplitter.Split(s); len(pts) == 2 {
 				switch pts[0] {
+				case tokenName:
+					result.name = unquoted(pts[1])
+					continue
 				case tokenDefault:
 					result.hasDefault = true
 					result.defaultValue = unquoted(pts[1])

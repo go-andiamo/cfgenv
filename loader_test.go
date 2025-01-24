@@ -123,6 +123,18 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			cfg: &struct {
+				Test string `env:"name=FOO"`
+			}{},
+			expectError: "missing env var 'FOO'",
+		},
+		{
+			cfg: &struct {
+				Test string `env:"name='FOO'"`
+			}{},
+			expectError: "missing env var 'FOO'",
+		},
+		{
+			cfg: &struct {
 				Test string `env:"optional"`
 			}{},
 		},
@@ -1589,4 +1601,28 @@ FOO=foo!`,
 			}
 		})
 	}
+}
+
+func TestLoad_Embedded(t *testing.T) {
+	type abstract struct {
+		Baz string
+	}
+	type base struct {
+		abstract
+		Foo string `env:"optional,default=foo"`
+	}
+	type config struct {
+		base
+		Bar string `env:"optional,default=bar"`
+	}
+	cfg := &config{}
+	err := Load(cfg, MapEnvReader{"BAZ": "baz"})
+	require.NoError(t, err)
+	assert.Equal(t, "baz", cfg.Baz)
+	assert.Equal(t, "foo", cfg.Foo)
+	assert.Equal(t, "bar", cfg.Bar)
+
+	cfg = &config{}
+	err = Load(cfg, MapEnvReader{})
+	require.Error(t, err)
 }
