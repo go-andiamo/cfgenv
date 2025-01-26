@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/go-andiamo/gopt"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -550,4 +552,87 @@ func TestExample_ErrorsWithWriteError(t *testing.T) {
 			assert.Equal(t, "fooey", err.Error())
 		})
 	}
+}
+
+func TestWrite_Embedded(t *testing.T) {
+	type base struct {
+		Foo string
+	}
+	type abstract struct {
+		base
+		Bar string
+	}
+	type myConfig struct {
+		abstract
+		Baz string
+	}
+	var w bytes.Buffer
+	err := Write(&w, &myConfig{})
+	require.NoError(t, err)
+	const expect = `FOO=
+BAR=
+BAZ=
+`
+	require.Equal(t, expect, w.String())
+}
+
+func TestWrite_Embedded_Errors(t *testing.T) {
+	type base struct {
+		Foo string
+	}
+	type myConfig struct {
+		base
+	}
+	w := &errorWriter{}
+	err := Write(w, &myConfig{})
+	require.Error(t, err)
+}
+
+func TestWrite_Embedded_WithExample(t *testing.T) {
+	type base struct {
+		Foo string
+	}
+	type abstract struct {
+		base
+		Bar string
+	}
+	type myConfig struct {
+		abstract
+		Baz string
+	}
+	var w bytes.Buffer
+	err := Example(&w, &myConfig{})
+	require.NoError(t, err)
+	const expect = `FOO=<string>
+BAR=<string>
+BAZ=<string>
+`
+	require.Equal(t, expect, w.String())
+}
+
+func TestWrite_Optional(t *testing.T) {
+	type config struct {
+		Foo gopt.Optional[string]
+	}
+	var w bytes.Buffer
+	err := Write(&w, &config{})
+	require.NoError(t, err)
+	const expect = `FOO=<value>
+`
+	require.Equal(t, expect, w.String())
+}
+
+func TestWrite_Optional_WithExample(t *testing.T) {
+	type config struct {
+		Foo gopt.Optional[int]
+	}
+	var w bytes.Buffer
+	cfg := &config{
+		Foo: *gopt.Of[int](0),
+	}
+	err := Example(&w, cfg)
+	require.NoError(t, err)
+	const expect = `FOO=<value>
+`
+	require.Equal(t, expect, w.String())
 }

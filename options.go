@@ -102,6 +102,8 @@ type expandOpt struct {
 	lookups []map[string]string
 }
 
+var defaultExpander ExpandOption = &expandOpt{}
+
 func (e *expandOpt) Expand(s string, er EnvReader) string {
 	if er == nil {
 		er = defaultReader

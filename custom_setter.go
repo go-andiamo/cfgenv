@@ -64,11 +64,11 @@ func NewDurationSetter() CustomSetterOption {
 	return &durationSetterOption{}
 }
 
-var durType = reflect.TypeOf(time.Duration(0))
-var optDurType = reflect.TypeOf(gopt.Optional[time.Duration]{})
+var durationType = reflect.TypeOf(time.Duration(0))
+var optDurationType = reflect.TypeOf(gopt.Optional[time.Duration]{})
 
 func (d *durationSetterOption) IsApplicable(fld reflect.StructField) bool {
-	return fld.Type == durType || fld.Type == optDurType
+	return fld.Type == durationType || fld.Type == optDurationType
 }
 
 func (d *durationSetterOption) Set(fld reflect.StructField, v reflect.Value, raw string, present bool) error {
@@ -76,7 +76,7 @@ func (d *durationSetterOption) Set(fld reflect.StructField, v reflect.Value, raw
 	if err != nil {
 		return err
 	}
-	if fld.Type == durType {
+	if fld.Type == durationType {
 		v.Set(reflect.ValueOf(dur))
 	} else if present {
 		av := gopt.Empty[time.Duration]().WasSetElseSet(dur)
