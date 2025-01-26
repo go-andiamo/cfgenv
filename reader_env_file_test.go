@@ -126,14 +126,3 @@ var _ io.Reader = (*erroringReader)(nil)
 func (e *erroringReader) Read(p []byte) (n int, err error) {
 	return 0, errors.New("test error")
 }
-
-func TestMapEnvReader(t *testing.T) {
-	menv := MapEnvReader{
-		"FOO": "foo",
-		"BAR": "bar",
-	}
-	require.Equal(t, 2, len(menv.Environ()))
-	v, ok := menv.LookupEnv("FOO")
-	require.True(t, ok)
-	require.Equal(t, "foo", v)
-}

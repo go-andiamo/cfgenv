@@ -87,7 +87,12 @@ func write(w io.Writer, v reflect.Value, prefix string, actual bool, options *op
 func writeValue(w io.Writer, v reflect.Value, prefix string, actual bool, options *opts, seen map[string]bool, added map[string]string) error {
 	t := v.Type()
 	for f := 0; f < t.NumField(); f++ {
-		if fld := t.Field(f); fld.IsExported() {
+		if fld := t.Field(f); fld.Anonymous {
+			ev := v.Field(f)
+			if err := writeValue(w, ev, prefix, actual, options, seen, added); err != nil {
+				return err
+			}
+		} else if fld.IsExported() {
 			fi, err := getFieldInfo(fld, options)
 			if err != nil {
 				return err

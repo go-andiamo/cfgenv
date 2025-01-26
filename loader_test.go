@@ -756,7 +756,7 @@ func TestLoad(t *testing.T) {
 				Test string
 			}{},
 			options:     []any{Expand(), Expand()},
-			expectError: "multiple expand options",
+			expectError: "multiple expander options",
 		},
 		{
 			cfg: &struct {
@@ -894,6 +894,27 @@ func TestLoad(t *testing.T) {
 				"TEST": "not encoded properly",
 			},
 			expectError: "unable to decode env var 'TEST' (encoding: 'base64'): illegal base64 data at input byte 3",
+		},
+		{
+			cfg: &struct {
+				Test string `env:"expand"`
+			}{},
+			env: map[string]string{
+				"TEST": "${FOO}-${BAR}",
+				"FOO":  "foo!",
+				"BAR":  "bar!",
+			},
+			expect: `{"Test":"foo!-bar!"}`,
+		},
+		{
+			cfg: &struct {
+				Test string `env:"no-expand"`
+			}{},
+			env: map[string]string{
+				"TEST": "${FOO}-${BAR}",
+			},
+			options: []any{Expand()},
+			expect:  `{"Test":"${FOO}-${BAR}"}`,
 		},
 	}
 	for i, tc := range testCases {
@@ -1545,7 +1566,7 @@ func TestLoadFile(t *testing.T) {
 				Test string
 			}{},
 			options:     []any{Expand(), Expand()},
-			expectError: "multiple expand options",
+			expectError: "multiple expander options",
 		},
 		{
 			cfg: &struct {

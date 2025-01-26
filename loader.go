@@ -3,7 +3,6 @@ package cfgenv
 import (
 	"errors"
 	"fmt"
-	"github.com/go-andiamo/splitter"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -90,9 +89,9 @@ func buildOpts(options ...any) (*opts, error) {
 				name = true
 			case ExpandOption:
 				if expand {
-					return nil, errors.New("multiple expand options")
+					return nil, errors.New("multiple expander options")
 				}
-				result.expand = ot
+				result.expander = ot
 				expand = true
 			case EnvReader:
 				if reader {
@@ -116,10 +115,19 @@ type opts struct {
 	prefix    PrefixOption
 	separator SeparatorOption
 	naming    NamingOption
-	expand    ExpandOption
+	expander  ExpandOption
 	customs   []CustomSetterOption
 	decoders  map[string]Decoder
 	reader    EnvReader
+}
+
+func (o *opts) expand(s string, fi *fieldInfo) string {
+	if !fi.noExpand && o.expander != nil {
+		return o.expander.Expand(s, o.reader)
+	} else if fi.expand {
+		return defaultExpander.Expand(s, o.reader)
+	}
+	return s
 }
 
 func loadStruct(v reflect.Value, prefix string, options *opts) error {
@@ -139,9 +147,7 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 			switch {
 			case fi.optionalSetter != nil:
 				if raw, ok := options.reader.LookupEnv(name); ok {
-					if options.expand != nil {
-						raw = options.expand.Expand(raw, options.reader)
-					}
+					raw = options.expand(raw, fi)
 					if fi.decoder != nil {
 						if raw, err = fi.decoder.Decode(raw); err != nil {
 							return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
@@ -162,12 +168,12 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				} else if !ok && fi.hasDefault {
 					raw = fi.defaultValue
 				}
-				if options.expand != nil {
-					raw = options.expand.Expand(raw, options.reader)
-				}
-				if ok && fi.decoder != nil {
-					if raw, err = fi.decoder.Decode(raw); err != nil {
-						return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
+				if ok {
+					raw = options.expand(raw, fi)
+					if fi.decoder != nil {
+						if raw, err = fi.decoder.Decode(raw); err != nil {
+							return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
+						}
 					}
 				}
 				if err = fi.customSetter.Set(fld, v.Field(f), raw, ok); err != nil {
@@ -175,12 +181,12 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				}
 			case fi.isMatchedMap && fi.isPrefixedMap:
 				pfx := addPrefixes(prefix, fi.prefix, options.separator.GetSeparator())
-				setPrefixMatchMap(v.Field(f), fi.matchRegex, pfx, options)
+				setPrefixMatchMap(v.Field(f), fi.matchRegex, pfx, fi, options)
 			case fi.isMatchedMap:
-				setMatchMap(v.Field(f), fi.matchRegex, options)
+				setMatchMap(v.Field(f), fi.matchRegex, fi, options)
 			case fi.isPrefixedMap:
 				pfx := addPrefixes(prefix, fi.prefix, options.separator.GetSeparator())
-				setPrefixMap(v.Field(f), pfx, options)
+				setPrefixMap(v.Field(f), pfx, fi, options)
 			case fi.isStruct:
 				fv := v.Field(f)
 				if fi.pointer {
@@ -201,12 +207,12 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 				} else if !ok && fi.pointer {
 					continue
 				}
-				if options.expand != nil {
-					raw = options.expand.Expand(raw, options.reader)
-				}
-				if ok && fi.decoder != nil {
-					if raw, err = fi.decoder.Decode(raw); err != nil {
-						return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
+				if ok {
+					raw = options.expand(raw, fi)
+					if fi.decoder != nil {
+						if raw, err = fi.decoder.Decode(raw); err != nil {
+							return fmt.Errorf("unable to decode env var '%s' (encoding: '%s'): %s", name, fi.decoder.Encoding(), err.Error())
+						}
 					}
 				}
 				if err = setValue(name, raw, fld, fi, v.Field(f)); err != nil {
@@ -217,8 +223,6 @@ func loadStruct(v reflect.Value, prefix string, options *opts) error {
 	}
 	return nil
 }
-
-var durationType = reflect.TypeOf(time.Duration(0))
 
 func setValue(name string, raw string, fld reflect.StructField, fi *fieldInfo, fv reflect.Value) (err error) {
 	k := fv.Type().Kind()
@@ -311,48 +315,36 @@ func setMap(name string, raw string, fld reflect.StructField, fi *fieldInfo, fv 
 	return nil
 }
 
-func setPrefixMap(fv reflect.Value, prefix string, options *opts) {
+func setPrefixMap(fv reflect.Value, prefix string, fi *fieldInfo, options *opts) {
 	m := map[string]string{}
 	for _, e := range options.reader.Environ() {
 		if strings.HasPrefix(e, prefix) {
 			ev := strings.SplitN(e, "=", 2)
-			if options.expand != nil {
-				m[ev[0][len(prefix):]] = options.expand.Expand(ev[1], options.reader)
-			} else {
-				m[ev[0][len(prefix):]] = ev[1]
-			}
+			m[ev[0][len(prefix):]] = options.expand(ev[1], fi)
 		}
 	}
 	fv.Set(reflect.ValueOf(m))
 }
 
-func setPrefixMatchMap(fv reflect.Value, rx *regexp.Regexp, prefix string, options *opts) {
+func setPrefixMatchMap(fv reflect.Value, rx *regexp.Regexp, prefix string, fi *fieldInfo, options *opts) {
 	m := map[string]string{}
 	for _, e := range options.reader.Environ() {
 		if strings.HasPrefix(e, prefix) {
 			ev := strings.SplitN(e, "=", 2)
 			if name := ev[0][len(prefix):]; rx.MatchString(name) {
-				if options.expand != nil {
-					m[name] = options.expand.Expand(ev[1], options.reader)
-				} else {
-					m[name] = ev[1]
-				}
+				m[name] = options.expand(ev[1], fi)
 			}
 		}
 	}
 	fv.Set(reflect.ValueOf(m))
 }
 
-func setMatchMap(fv reflect.Value, rx *regexp.Regexp, options *opts) {
+func setMatchMap(fv reflect.Value, rx *regexp.Regexp, fi *fieldInfo, options *opts) {
 	m := map[string]string{}
 	for _, e := range options.reader.Environ() {
 		ev := strings.SplitN(e, "=", 2)
 		if rx.MatchString(ev[0]) {
-			if options.expand != nil {
-				m[ev[0]] = options.expand.Expand(ev[1], options.reader)
-			} else {
-				m[ev[0]] = ev[1]
-			}
+			m[ev[0]] = options.expand(ev[1], fi)
 		}
 	}
 	fv.Set(reflect.ValueOf(m))
@@ -435,199 +427,4 @@ func addPrefixes(currPfx, addPfx string, separator string) string {
 		return addPfx
 	}
 	return currPfx
-}
-
-var tagSplitter = splitter.MustCreateSplitter(',', splitter.DoubleQuotes, splitter.SingleQuotes).
-	AddDefaultOptions(splitter.Trim(" "), splitter.IgnoreEmpties)
-var eqSplitter = splitter.MustCreateSplitter('=', splitter.DoubleQuotes, splitter.SingleQuotes).
-	AddDefaultOptions(splitter.Trim(" "))
-
-const (
-	tokenDefault   = "default"
-	tokenPrefix    = "prefix"
-	tokenMatch     = "match"
-	tokenSeparator = "separator"
-	tokenSep       = "sep"
-	tokenDelimiter = "delimiter"
-	tokenDelim     = "delim"
-	tokenOptional  = "optional"
-	tokenEncoding  = "encoding"
-	tokenName      = "name"
-)
-
-func getFieldInfo(fld reflect.StructField, options *opts) (*fieldInfo, error) {
-	result, err := checkFieldType(fld, options)
-	if err != nil {
-		return nil, err
-	}
-	if tag, ok := fld.Tag.Lookup("env"); ok {
-		parts, err := tagSplitter.Split(tag)
-		if err != nil {
-			return nil, fmt.Errorf("invalid tag '%s' on field '%s'", tag, fld.Name)
-		}
-		for _, s := range parts {
-			if pts, _ := eqSplitter.Split(s); len(pts) == 2 {
-				switch pts[0] {
-				case tokenName:
-					result.name = unquoted(pts[1])
-					continue
-				case tokenDefault:
-					result.hasDefault = true
-					result.defaultValue = unquoted(pts[1])
-					continue
-				case tokenPrefix:
-					result.prefix = pts[1]
-					if fld.Type.Kind() == reflect.Map {
-						result.isPrefixedMap = fld.Type.Elem().Kind() == reflect.String && fld.Type.Key().Kind() == reflect.String
-					}
-					if !result.isPrefixedMap && !result.isStruct {
-						return nil, fmt.Errorf("cannot use env tag 'prefix' on field '%s' (only for structs or map[string]string)", fld.Name)
-					}
-					continue
-				case tokenMatch:
-					if fld.Type.Kind() == reflect.Map {
-						result.isMatchedMap = fld.Type.Elem().Kind() == reflect.String && fld.Type.Key().Kind() == reflect.String
-					}
-					if !result.isMatchedMap {
-						return nil, fmt.Errorf("cannot use env tag 'match' on field '%s' (only for map[string]string)", fld.Name)
-					}
-					rxs := unquoted(pts[1])
-					if result.matchRegex, err = regexp.Compile(rxs); err != nil {
-						return nil, fmt.Errorf("env tag 'match' on field '%s' - invalid regexp: %s", fld.Name, err.Error())
-					}
-					continue
-				case tokenSeparator, tokenSep:
-					result.separator = unquoted(pts[1])
-					continue
-				case tokenDelimiter, tokenDelim:
-					result.delimiter = unquoted(pts[1])
-					continue
-				case tokenEncoding:
-					if dec, ok := options.decoders[pts[1]]; ok {
-						result.decoder = dec
-						continue
-					} else {
-						return nil, fmt.Errorf("unknown encoding '%s' on field '%s'", pts[1], fld.Name)
-					}
-				}
-				return nil, fmt.Errorf("invalid tag '%s' on field '%s'", s, fld.Name)
-			} else if len(pts) == 1 {
-				switch s {
-				case tokenOptional:
-					result.optional = true
-				case tokenDefault, tokenPrefix, tokenSeparator, tokenSep, tokenDelimiter, tokenDelim, tokenMatch, tokenEncoding:
-					return nil, fmt.Errorf("cannot use env tag '%s' without value on field '%s' (use quotes if necessary)", s, fld.Name)
-				default:
-					result.name = unquoted(s)
-				}
-			} else {
-				return nil, fmt.Errorf("invalid tag '%s' on field '%s'", s, fld.Name)
-			}
-		}
-	}
-	return result, nil
-}
-
-func unquoted(s string) string {
-	if (strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`)) ||
-		(strings.HasPrefix(s, `'`) && strings.HasSuffix(s, `'`)) {
-		return s[1 : len(s)-1]
-	}
-	return s
-}
-
-func checkFieldType(fld reflect.StructField, options *opts) (*fieldInfo, error) {
-	isPtr := false
-	k := fld.Type.Kind()
-	if isPtr = k == reflect.Pointer; isPtr {
-		k = fld.Type.Elem().Kind()
-	}
-	result := &fieldInfo{
-		pointer:   isPtr,
-		optional:  isPtr,
-		separator: ":",
-		delimiter: ",",
-	}
-	for _, c := range options.customs {
-		if ok := c.IsApplicable(fld); ok {
-			result.customSetter = c
-			return result, nil
-		}
-	}
-	if setFn, ok := optionalTypeSetters[fld.Type]; ok {
-		result.optional = true
-		result.optionalSetter = setFn
-		return result, nil
-	}
-	if isNativeType(k) {
-		return result, nil
-	}
-	switch k {
-	case reflect.Slice:
-		if isPtr {
-			return nil, fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
-		} else {
-			// check slice item type...
-			it := fld.Type.Elem()
-			if it.Kind() == reflect.Pointer {
-				it = it.Elem()
-			}
-			if !isNativeType(it.Kind()) {
-				return nil, fmt.Errorf("field '%s' has unsupported slice item type", fld.Name)
-			}
-		}
-	case reflect.Map:
-		if isPtr {
-			return nil, fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
-		} else {
-			// check map item type...
-			it := fld.Type.Elem()
-			if it.Kind() == reflect.Pointer {
-				it = it.Elem()
-			}
-			if !isNativeType(it.Kind()) {
-				return nil, fmt.Errorf("field '%s' has unsupported map item type", fld.Name)
-			} else {
-				// check map key type...
-				it = fld.Type.Key()
-				if !isNativeType(it.Kind()) {
-					return nil, fmt.Errorf("field '%s' has unsupported map key type", fld.Name)
-				}
-			}
-		}
-	case reflect.Struct:
-		result.isStruct = true
-	default:
-		return nil, fmt.Errorf("field '%s' has unsupported type - %s", fld.Name, fld.Type.String())
-	}
-	return result, nil
-}
-
-func isNativeType(k reflect.Kind) bool {
-	switch k {
-	case reflect.String, reflect.Bool,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return true
-	}
-	return false
-}
-
-type fieldInfo struct {
-	name           string
-	optional       bool
-	pointer        bool
-	hasDefault     bool
-	defaultValue   string
-	prefix         string
-	isStruct       bool
-	isPrefixedMap  bool
-	isMatchedMap   bool
-	matchRegex     *regexp.Regexp
-	customSetter   CustomSetterOption
-	optionalSetter optionalSetterFn
-	decoder        Decoder
-	separator      string
-	delimiter      string
 }
